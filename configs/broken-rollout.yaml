@@ -1,0 +1,17 @@
+receivers:
+  hostmetrics:
+    collection_interval: 60s
+    scrapers:
+      cpu:
+      memory:
+
+exporters:
+  otlp/broken:
+    endpoint: "not a valid endpoint"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [hostmetrics]
+      exporters: [otlp/broken]
+

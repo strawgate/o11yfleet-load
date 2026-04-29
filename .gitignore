@@ -1,0 +1,11 @@
+.DS_Store
+.env
+*.env
+run.env
+logs/
+runtime/
+results/
+supervisord.ini
+collector-*.yaml
+otelcol-contrib.deb
+

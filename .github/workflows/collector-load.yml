@@ -1,0 +1,244 @@
+name: Collector Load
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Collector process runtime, for example 10m, 2h, or 5h.
+        required: true
+        default: 30m
+      runners:
+        description: Number of parallel GitHub-hosted runners.
+        required: true
+        default: "1"
+      collectors_per_runner:
+        description: Number of collector processes to run on each runner.
+        required: true
+        default: "100"
+      delay_start:
+        description: Max random startup delay per collector, in seconds.
+        required: true
+        default: "120"
+      collector_version:
+        description: otelcol-contrib version.
+        required: true
+        default: "0.150.0"
+      collection_interval:
+        description: hostmetrics collection interval.
+        required: true
+        default: 60s
+      failure_percent:
+        description: Percent of collectors assigned to the canary group.
+        required: true
+        default: "0"
+      rollout_after:
+        description: Seconds after provisioning before healthy main rollout. Use 0 to disable.
+        required: true
+        default: "300"
+      break_after:
+        description: Seconds after provisioning before broken canary rollout. Use 0 to disable.
+        required: true
+        default: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: collector-load-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        name: Build runner matrix
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          n = int(os.environ["RUNNERS"])
+          if n < 1 or n > 500:
+              raise SystemExit("runners must be between 1 and 500")
+          print("matrix=" + json.dumps(list(range(n))))
+          PY
+        env:
+          RUNNERS: ${{ inputs.runners }}
+
+  provision:
+    name: Provision o11yFleet
+    runs-on: ubuntu-latest
+    outputs:
+      run_id: ${{ steps.provision.outputs.run_id }}
+      tenant_id: ${{ steps.provision.outputs.tenant_id }}
+      main_config_id: ${{ steps.provision.outputs.main_config_id }}
+      canary_config_id: ${{ steps.provision.outputs.canary_config_id }}
+      main_enrollment_token: ${{ steps.provision.outputs.main_enrollment_token }}
+      canary_enrollment_token: ${{ steps.provision.outputs.canary_enrollment_token }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: provision
+        name: Create tenant, configs, and enrollment tokens
+        env:
+          O11YFLEET_API_URL: ${{ secrets.O11YFLEET_API_URL }}
+          API_SECRET: ${{ secrets.API_SECRET }}
+          RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          ./scripts/provision-run.sh
+
+      - name: Upload run manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-env
+          path: run.env
+          retention-days: 7
+
+  load:
+    name: Load runner ${{ matrix.runner_index }}
+    needs: [plan, provision]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        runner_index: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      O11YFLEET_API_URL: ${{ secrets.O11YFLEET_API_URL }}
+      MAIN_ENROLLMENT_TOKEN: ${{ needs.provision.outputs.main_enrollment_token }}
+      CANARY_ENROLLMENT_TOKEN: ${{ needs.provision.outputs.canary_enrollment_token }}
+      PROJECT_OTLP_ENDPOINT: ${{ secrets.PROJECT_OTLP_ENDPOINT }}
+      PROJECT_OTLP_API_KEY: ${{ secrets.PROJECT_OTLP_API_KEY }}
+      RUN_ID: ${{ needs.provision.outputs.run_id }}
+      JOB_INDEX: ${{ matrix.runner_index }}
+      COLLECTORS_PER_RUNNER: ${{ inputs.collectors_per_runner }}
+      NUMPROCS: ${{ inputs.collectors_per_runner }}
+      DURATION: ${{ inputs.duration }}
+      DELAY_START: ${{ inputs.delay_start }}
+      FAILURE_PERCENT: ${{ inputs.failure_percent }}
+      COLLECTION_INTERVAL: ${{ inputs.collection_interval }}
+      SERVICE_NAME: o11yfleet-load
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install otelcol-contrib
+        run: |
+          set -euo pipefail
+          version="${{ inputs.collector_version }}"
+          url="https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${version}/otelcol-contrib_${version}_linux_amd64.deb"
+          curl -fsSL -o otelcol-contrib.deb "$url"
+          sudo dpkg -i otelcol-contrib.deb
+          rm otelcol-contrib.deb
+          /usr/bin/otelcol-contrib --version
+
+      - name: Install supervisor
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --disable-pip-version-check supervisor
+
+      - name: Validate one generated config
+        env:
+          INSTANCE: "0"
+          GLOBAL_INDEX: ${{ matrix.runner_index }}
+        run: |
+          ./scripts/generate-collector-config.sh runtime/validate.yaml "$MAIN_ENROLLMENT_TOKEN" "00000000-0000-5000-8000-000000000000"
+          /usr/bin/otelcol-contrib --config runtime/validate.yaml validate
+
+      - name: Run collectors
+        run: |
+          set -euo pipefail
+          mkdir -p logs runtime results
+          ./scripts/generate-supervisor-config.sh
+          ./scripts/sample-runner.sh &
+          sampler_pid=$!
+          case "$DURATION" in
+            *s) duration_seconds="${DURATION%s}" ;;
+            *m) duration_seconds="$(( ${DURATION%m} * 60 ))" ;;
+            *h) duration_seconds="$(( ${DURATION%h} * 3600 ))" ;;
+            *d) duration_seconds="$(( ${DURATION%d} * 86400 ))" ;;
+            *) duration_seconds="$DURATION" ;;
+          esac
+          timeout_seconds="$(( duration_seconds + DELAY_START + 180 ))"
+          . .venv/bin/activate
+          set +e
+          timeout "$timeout_seconds" supervisord -c supervisord.ini
+          status=$?
+          set -e
+          kill "$sampler_pid" 2>/dev/null || true
+          wait "$sampler_pid" 2>/dev/null || true
+          if [ "$status" -eq 124 ]; then
+            exit 0
+          fi
+          exit "$status"
+
+      - name: Upload runner artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-${{ matrix.runner_index }}-artifacts
+          path: |
+            logs
+            runtime
+            results
+            supervisord.ini
+          retention-days: 7
+
+  control:
+    name: Rollouts and Stats
+    needs: provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      O11YFLEET_API_URL: ${{ secrets.O11YFLEET_API_URL }}
+      API_SECRET: ${{ secrets.API_SECRET }}
+      RUN_ID: ${{ needs.provision.outputs.run_id }}
+      TENANT_ID: ${{ needs.provision.outputs.tenant_id }}
+      MAIN_CONFIG_ID: ${{ needs.provision.outputs.main_config_id }}
+      CANARY_CONFIG_ID: ${{ needs.provision.outputs.canary_config_id }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Poll initial stats
+        env:
+          POLL_COUNT: "6"
+          POLL_INTERVAL: "30"
+          OUT_FILE: results/stats-initial.jsonl
+        run: ./scripts/poll-stats.sh
+
+      - name: Roll out healthy main config
+        if: ${{ inputs.rollout_after != '0' }}
+        env:
+          CONFIG_ID: ${{ needs.provision.outputs.main_config_id }}
+          CONFIG_FILE: configs/healthy-rollout.yaml
+        run: |
+          sleep "${{ inputs.rollout_after }}"
+          ./scripts/rollout-config.sh
+
+      - name: Roll out broken canary config
+        if: ${{ inputs.break_after != '0' && inputs.failure_percent != '0' }}
+        env:
+          CONFIG_ID: ${{ needs.provision.outputs.canary_config_id }}
+          CONFIG_FILE: configs/broken-rollout.yaml
+        run: |
+          sleep "${{ inputs.break_after }}"
+          ./scripts/rollout-config.sh
+
+      - name: Poll final stats
+        if: always()
+        env:
+          POLL_COUNT: "10"
+          POLL_INTERVAL: "30"
+          OUT_FILE: results/stats-final.jsonl
+        run: ./scripts/poll-stats.sh
+
+      - name: Upload control artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-artifacts
+          path: results
+          retention-days: 7
