@@ -22,7 +22,7 @@ on:
       collector_version:
         description: otelcol-contrib version.
         required: true
-        default: "0.150.0"
+        default: "0.123.0"
       collection_interval:
         description: hostmetrics collection interval.
         required: true
@@ -31,6 +31,14 @@ on:
         description: Percent of collectors assigned to the canary group.
         required: true
         default: "0"
+      opamp_client:
+        description: Use supervisor for remote config tests or extension for direct collector visibility.
+        required: true
+        default: supervisor
+        type: choice
+        options:
+          - supervisor
+          - extension
       rollout_after:
         description: Seconds after provisioning before healthy main rollout. Use 0 to disable.
         required: true
@@ -121,6 +129,7 @@ jobs:
       FAILURE_PERCENT: ${{ inputs.failure_percent }}
       COLLECTION_INTERVAL: ${{ inputs.collection_interval }}
       SERVICE_NAME: o11yfleet-load
+      OPAMP_CLIENT: ${{ inputs.opamp_client }}
     steps:
       - uses: actions/checkout@v5
 
@@ -140,13 +149,29 @@ jobs:
           . .venv/bin/activate
           pip install --disable-pip-version-check supervisor
 
+      - name: Install OpAMP Supervisor
+        if: ${{ inputs.opamp_client == 'supervisor' }}
+        run: |
+          set -euo pipefail
+          mkdir -p runtime/bin
+          version="${{ inputs.collector_version }}"
+          url="https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/cmd%2Fopampsupervisor%2Fv${version}/opampsupervisor_${version}_linux_amd64"
+          curl -fsSL -o runtime/bin/opampsupervisor "$url"
+          chmod +x runtime/bin/opampsupervisor
+          runtime/bin/opampsupervisor --help
+
       - name: Validate one generated config
         env:
           INSTANCE: "0"
           GLOBAL_INDEX: ${{ matrix.runner_index }}
         run: |
-          ./scripts/generate-collector-config.sh runtime/validate.yaml "$MAIN_ENROLLMENT_TOKEN" "00000000-0000-5000-8000-000000000000"
-          /usr/bin/otelcol-contrib --config runtime/validate.yaml validate
+          if [ "$OPAMP_CLIENT" = "supervisor" ]; then
+            ./scripts/generate-opamp-supervisor-config.sh runtime/validate-supervisor.yaml "$MAIN_ENROLLMENT_TOKEN"
+            test -s runtime/validate-supervisor.yaml
+          else
+            ./scripts/generate-collector-config.sh runtime/validate.yaml "$MAIN_ENROLLMENT_TOKEN" "00000000-0000-5000-8000-000000000000"
+            /usr/bin/otelcol-contrib --config runtime/validate.yaml validate
+          fi
 
       - name: Run collectors
         run: |

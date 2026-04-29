@@ -8,10 +8,12 @@ The first goal is practical calibration: run 100+ `otelcol-contrib` processes on
 
 - Provisions one o11yFleet tenant for each run.
 - Creates a main configuration group and an optional canary configuration group.
-- Starts many real `otelcol-contrib` processes per runner with the OpAMP extension enabled.
+- Starts many real `otelcol-contrib` processes per runner, managed by OpAMP Supervisor by default.
 - Exports hostmetrics to a real OTLP project when endpoint secrets are configured.
 - Optionally rolls out a healthy config to the main group and a broken config to the canary group.
 - Uploads collector logs, per-runner resource samples, generated configs, and final stats as artifacts.
+
+The workflow defaults to `opamp_client=supervisor` because remote configuration rollout requires a client that advertises `accepts_remote_config`. Use `opamp_client=extension` only when testing direct Collector OpAMP-extension visibility without remote config acceptance.
 
 ## GitHub Secrets
 
@@ -68,4 +70,3 @@ just check
 ```
 
 This validates shell syntax and exercises collector config generation without requiring a live o11yFleet deployment.
-

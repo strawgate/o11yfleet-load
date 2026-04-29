@@ -50,25 +50,23 @@ request_json() {
   local method="$1"
   local path="$2"
   local body="${3:-}"
-  local tenant_header=()
-  local body_arg=()
+  local curl_args=()
   local tmp
   local status
 
   tmp="$(mktemp)"
   if [ -n "${TENANT_ID:-}" ]; then
-    tenant_header=(-H "X-Tenant-Id: ${TENANT_ID}")
+    curl_args+=(-H "X-Tenant-Id: ${TENANT_ID}")
   fi
   if [ -n "$body" ]; then
-    body_arg=(-H "Content-Type: application/json" --data "$body")
+    curl_args+=(-H "Content-Type: application/json" --data "$body")
   fi
 
   status="$(
     curl -sS -o "$tmp" -w '%{http_code}' \
       -X "$method" "$(api_base)$path" \
       -H "Authorization: Bearer ${API_SECRET}" \
-      "${tenant_header[@]}" \
-      "${body_arg[@]}"
+      "${curl_args[@]}"
   )"
 
   if [[ "$status" != 2* ]]; then

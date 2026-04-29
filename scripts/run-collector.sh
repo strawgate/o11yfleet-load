@@ -14,6 +14,8 @@ JOB_INDEX="${JOB_INDEX:-0}"
 COLLECTORS_PER_RUNNER="${COLLECTORS_PER_RUNNER:-100}"
 FAILURE_PERCENT="${FAILURE_PERCENT:-0}"
 OTELCOL_BIN="${OTELCOL_BIN:-/usr/bin/otelcol-contrib}"
+OPAMPSUPERVISOR_BIN="${OPAMPSUPERVISOR_BIN:-$REPO_ROOT/runtime/bin/opampsupervisor}"
+OPAMP_CLIENT="${OPAMP_CLIENT:-supervisor}"
 RUN_ID="${RUN_ID:-local}"
 
 require_env O11YFLEET_API_URL
@@ -41,12 +43,28 @@ if [ "$DELAY_START" -gt 0 ]; then
 fi
 
 mkdir -p "$REPO_ROOT/runtime" "$REPO_ROOT/logs"
-CONFIG_FILE="$REPO_ROOT/runtime/collector-${GLOBAL_INDEX}.yaml"
 export RUN_ID JOB_INDEX INSTANCE GLOBAL_INDEX
+
+case "$OPAMP_CLIENT" in
+  supervisor)
+    CONFIG_FILE="$REPO_ROOT/runtime/supervisor-${GLOBAL_INDEX}.yaml"
+    "$SCRIPT_DIR/generate-opamp-supervisor-config.sh" "$CONFIG_FILE" "$TOKEN"
+    printf 'supervisor global_index=%s instance=%s cohort=%s config=%s\n' \
+      "$GLOBAL_INDEX" "$INSTANCE" "$COHORT" "$CONFIG_FILE"
+    exec timeout --preserve-status "$DURATION" "$OPAMPSUPERVISOR_BIN" --config "$CONFIG_FILE"
+    ;;
+  extension)
+    ;;
+  *)
+    printf 'invalid OPAMP_CLIENT: %s\n' "$OPAMP_CLIENT" >&2
+    exit 2
+    ;;
+esac
+
+CONFIG_FILE="$REPO_ROOT/runtime/collector-${GLOBAL_INDEX}.yaml"
 "$SCRIPT_DIR/generate-collector-config.sh" "$CONFIG_FILE" "$TOKEN" "$INSTANCE_UID"
 
-printf 'collector global_index=%s instance=%s cohort=%s uid=%s config=%s\n' \
+printf 'collector-extension global_index=%s instance=%s cohort=%s uid=%s config=%s\n' \
   "$GLOBAL_INDEX" "$INSTANCE" "$COHORT" "$INSTANCE_UID" "$CONFIG_FILE"
 
 exec timeout --preserve-status "$DURATION" "$OTELCOL_BIN" --config "$CONFIG_FILE"
-
