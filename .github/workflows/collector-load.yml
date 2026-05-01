@@ -50,6 +50,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: collector-load-${{ github.ref }}
@@ -94,6 +95,7 @@ jobs:
         env:
           O11YFLEET_API_URL: ${{ secrets.O11YFLEET_API_URL }}
           API_SECRET: ${{ secrets.API_SECRET }}
+          OIDC_AUDIENCE: o11yfleet
           RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           ./scripts/provision-run.sh

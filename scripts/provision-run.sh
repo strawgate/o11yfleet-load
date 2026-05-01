@@ -18,7 +18,15 @@ OUT_FILE="${OUT_FILE:-$REPO_ROOT/run.env}"
 
 printf 'Provisioning o11yFleet load run %s\n' "$RUN_ID"
 
-tenant_json="$(request_json POST /api/admin/tenants "{\"name\":\"${TENANT_NAME}\",\"plan\":\"${PLAN}\"}")"
+# Tenant creation requires OIDC auth (admin route).
+# When running in GHA, use the OIDC token; locally fall back to API_SECRET.
+if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+  printf 'Using GitHub OIDC for tenant creation\n'
+  tenant_json="$(request_json_oidc POST /api/admin/tenants "{\"name\":\"${TENANT_NAME}\",\"plan\":\"${PLAN}\"}")"
+else
+  printf 'No OIDC available, falling back to API_SECRET for tenant creation\n'
+  tenant_json="$(request_json POST /api/admin/tenants "{\"name\":\"${TENANT_NAME}\",\"plan\":\"${PLAN}\"}")"
+fi
 TENANT_ID="$(printf '%s' "$tenant_json" | json_get id)"
 export TENANT_ID
 
