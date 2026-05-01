@@ -22,7 +22,7 @@ on:
       collector_version:
         description: otelcol-contrib version.
         required: true
-        default: "0.123.0"
+        default: "0.151.0"
       collection_interval:
         description: hostmetrics collection interval.
         required: true
