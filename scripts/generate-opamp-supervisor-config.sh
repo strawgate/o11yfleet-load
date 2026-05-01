@@ -40,8 +40,11 @@ capabilities:
 
 agent:
   executable: ${OTELCOL_BIN}
+  args:
+    # Disable internal Prometheus metrics endpoint (default :8888)
+    # to avoid port conflicts with multiple collectors on same host
+    - --set=service.telemetry.metrics.level=none
 
 storage:
   directory: ${SUPERVISOR_STORAGE_ROOT}-${GLOBAL_INDEX}
 EOF
-
