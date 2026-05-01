@@ -44,14 +44,12 @@ main_token_json="$(
     "{\"label\":\"load-main-${RUN_ID}\",\"expires_in_hours\":${TOKEN_TTL_HOURS}}"
 )"
 MAIN_ENROLLMENT_TOKEN="$(printf '%s' "$main_token_json" | json_get token)"
-printf '::add-mask::%s\n' "$MAIN_ENROLLMENT_TOKEN"
 
 canary_token_json="$(
   request_json POST "/api/v1/configurations/${CANARY_CONFIG_ID}/enrollment-token" \
     "{\"label\":\"load-canary-${RUN_ID}\",\"expires_in_hours\":${TOKEN_TTL_HOURS}}"
 )"
 CANARY_ENROLLMENT_TOKEN="$(printf '%s' "$canary_token_json" | json_get token)"
-printf '::add-mask::%s\n' "$CANARY_ENROLLMENT_TOKEN"
 
 mkdir -p "$(dirname "$OUT_FILE")"
 cat > "$OUT_FILE" <<EOF
