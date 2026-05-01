@@ -22,24 +22,7 @@ printf 'Provisioning o11yFleet load run %s\n' "$RUN_ID"
 # When running in GHA, use the OIDC token; locally fall back to API_SECRET.
 if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
   printf 'Using GitHub OIDC for tenant creation\n'
-  # Debug: decode JWT header and payload (non-sensitive claims) for troubleshooting
-  oidc_token="$(get_oidc_token "${OIDC_AUDIENCE:-o11yfleet}")"
-  printf 'OIDC token length: %d\n' "${#oidc_token}"
-  # Print decoded header (kid, alg)
-  printf '%s' "$oidc_token" | cut -d. -f1 | base64 -d 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'JWT header: alg={d.get(\"alg\")} kid={d.get(\"kid\",\"?\")[:30]}')" || true
-  # Print decoded payload claims (non-secret: iss, aud, repository, exp)
-  printf '%s' "$oidc_token" | cut -d. -f2 | python3 -c "
-import json,sys,base64
-b64 = sys.stdin.read().strip()
-b64 += '=' * (4 - len(b64) % 4)
-d = json.loads(base64.urlsafe_b64decode(b64))
-print(f'JWT claims: iss={d.get(\"iss\")} aud={d.get(\"aud\")} repo={d.get(\"repository\")} exp={d.get(\"exp\")}')
-" || true
-  # Use OIDC token directly
-  API_SECRET_SAVED="$API_SECRET"
-  API_SECRET="$oidc_token"
-  tenant_json="$(request_json POST /api/admin/tenants "{\"name\":\"${TENANT_NAME}\",\"plan\":\"${PLAN}\"}")"
-  API_SECRET="$API_SECRET_SAVED"
+  tenant_json="$(request_json_oidc POST /api/admin/tenants "{\"name\":\"${TENANT_NAME}\",\"plan\":\"${PLAN}\"}")"
 else
   printf 'No OIDC available, falling back to API_SECRET for tenant creation\n'
   tenant_json="$(request_json POST /api/admin/tenants "{\"name\":\"${TENANT_NAME}\",\"plan\":\"${PLAN}\"}")"
